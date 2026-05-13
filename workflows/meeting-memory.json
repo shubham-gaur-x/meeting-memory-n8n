@@ -1,0 +1,577 @@
+{
+  "name": "Meeting Memory",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {},
+        "options": {}
+      },
+      "id": "node-gmail-trigger",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// n8n Code Node: Check Duplicate\n// Mode: Run Once for Each Item\n// Checks workflow static data for already-processed Gmail message IDs.\n// Returns [] (empty) to stop execution for duplicates.\n// Returns item with _message_id added for new messages.\n\nconst state = $getWorkflowStaticData('global');\nstate.processed = state.processed || {};\n\nconst msgId = $json.id || $json.messageId || '';\n\nif (!msgId) {\n  // No message ID available — let through (cannot deduplicate without an ID)\n  return { json: { ...$json, _message_id: '' } };\n}\n\nif (state.processed[msgId]) {\n  // Already processed — return empty array to stop this execution branch silently\n  return [];\n}\n\nreturn { json: { ...$json, _message_id: msgId } };\n"
+      },
+      "id": "node-check-duplicate",
+      "name": "Check Duplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// n8n Code Node: Classify Email\n// Mode: Run Once for Each Item\n// Input: Gmail Trigger output\n// Output: original item + _classification { is_meeting, score, reason, kind }\n\nconst MEETING_SENDERS = new Set([\n  'noreply-calendar-invitation@google.com',\n  'calendar-notification@google.com',\n  'gemini-notes@google.com',\n  'no-reply@zoom.us',\n  'no-reply@us05web.zoom.us',\n  'noreply@zoom.us',\n  'no-reply@meet.google.com',\n  'no-reply@chime.aws',\n  'noreply@webex.com',\n  'noreply@teams.microsoft.com',\n  'fathom@fathom.video',\n  'noreply@fathom.video',\n  'team@otter.ai',\n  'noreply@otter.ai',\n  'noreply@fireflies.ai',\n  'no-reply@fireflies.ai',\n  'noreply@read.ai',\n  'no-reply@calendly.com',\n  'scheduling@x.ai',\n]);\n\nconst MEETING_DOMAINS = new Set([\n  'fathom.video',\n  'otter.ai',\n  'fireflies.ai',\n  'read.ai',\n  'calendly.com',\n  'savvycal.com',\n  'zoom.us',\n  'webex.com',\n  'teams.microsoft.com',\n  'meet.google.com',\n  'chime.aws',\n]);\n\nconst SUBJECT_HINTS = [\n  /\\binvitation\\b/i,\n  /\\bmeeting\\b/i,\n  /\\bcall\\b/i,\n  /\\bsync\\b/i,\n  /\\b1:1\\b/i,\n  /\\bone[- ]on[- ]one\\b/i,\n  /\\bstandup\\b/i,\n  /\\bstand-up\\b/i,\n  /\\bcatch[- ]up\\b/i,\n  /\\bcheck[- ]in\\b/i,\n  /\\bdiscussion\\b/i,\n  /\\bagenda\\b/i,\n  /\\binterview\\b/i,\n  /\\bdebrief\\b/i,\n  /\\bplanning\\b/i,\n  /\\bretro(spective)?\\b/i,\n  /\\breview\\b/i,\n  /\\bworkshop\\b/i,\n  /\\bdemo\\b/i,\n  /\\bkick[- ]?off\\b/i,\n  /\\bintro\\b/i,\n  /\\bchat\\b/i,\n  /\\bquick (call|chat|sync)\\b/i,\n  /\\baction items?\\b/i,\n  /\\bnotes?(\\s+from|:)\\b/i,\n  /\\brecap of\\b/i,\n  /\\b(transcript|recording) (of|from|for)\\b/i,\n  /\\b(zoom|teams|meet|webex|chime) (recording|meeting|invite)\\b/i,\n];\n\nconst BODY_HINTS = /meeting (link|recording|transcript)|join (the )?meeting|google meet|zoom\\.us\\/(j|my)\\/|teams\\.microsoft\\.com\\/l\\/meetup|action items?|attendees?:|agenda|recap|begin:vcalendar/i;\n\n// Extract sender email from \"Display Name <email@domain.com>\" format\nconst rawFrom = ($json.from || $json.From || '').toLowerCase();\nconst emailMatch = rawFrom.match(/<([^>]+)>/);\nconst senderEmail = emailMatch ? emailMatch[1] : rawFrom.trim();\nconst senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1] : '';\n\nconst subject = ($json.subject || $json.Subject || '').toLowerCase();\nconst body = ($json.text || $json.body || $json.snippet || '').toLowerCase();\n\nlet score = 0;\nconst reasons = [];\nlet kind = 'other';\n\nif (MEETING_SENDERS.has(senderEmail)) {\n  score += 0.8;\n  reasons.push(`sender:${senderEmail}`);\n}\nif (MEETING_DOMAINS.has(senderDomain)) {\n  score += 0.5;\n  reasons.push(`domain:${senderDomain}`);\n}\nif (SUBJECT_HINTS.some(re => re.test(subject))) {\n  score += 0.4;\n  reasons.push('subject-hint');\n}\nif (BODY_HINTS.test(body)) {\n  score += 0.3;\n  reasons.push('body-hint');\n}\nif (body.includes('begin:vcalendar')) {\n  score += 0.5;\n  reasons.push('vcalendar');\n}\n\n// Kind detection\nif (body.includes('begin:vcalendar') || subject.includes('invitation')) {\n  kind = 'invite';\n} else if (subject.includes('canceled event')) {\n  kind = 'invite';\n} else if (subject.includes('recording') || body.slice(0, 500).includes('recording')) {\n  kind = 'recording';\n} else if (subject.includes('transcript') || body.slice(0, 1000).includes('transcript')) {\n  kind = 'transcript';\n} else if (senderEmail === 'gemini-notes@google.com' || body.slice(0, 200).includes('notes from')) {\n  kind = 'transcript';\n} else if (subject.includes('recap') || subject.includes('notes from') || body.includes('action items')) {\n  kind = 'recap';\n} else if (MEETING_DOMAINS.has(senderDomain)) {\n  kind = 'recap';\n} else if (score >= 0.4) {\n  kind = 'conversation';\n}\n\nreturn {\n  json: {\n    ...$json,\n    _classification: {\n      is_meeting: score >= 0.6,\n      score: Math.round(score * 100) / 100,\n      reason: reasons.join(', ') || 'no signals',\n      kind,\n    },\n  },\n};\n"
+      },
+      "id": "node-classify",
+      "name": "Classify Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json._classification.score }}",
+              "operation": "largerEqual",
+              "value2": 0.6
+            }
+          ]
+        }
+      },
+      "id": "node-if-meeting",
+      "name": "Is Meeting?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json._classification.kind }}",
+              "operation": "equal",
+              "value2": "invite"
+            }
+          ]
+        }
+      },
+      "id": "node-is-invite",
+      "name": "Is Invite?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// n8n Code Node: Build Groq API Request Body\n// Mode: Run Once for Each Item\n// Input: Classify Email output\n// Output: { _groq_body: {...}, ...original fields }\n\nconst SYSTEM_PROMPT = `You analyze meeting-related emails (calendar invites, recap threads, recording links, auto-transcripts from Otter/Fathom/Fireflies/Read.ai, intros, scheduling messages) and return a strict JSON object describing the meeting.\n\nSchema (return ONLY valid JSON, no prose, no markdown fences):\n{\n  \"title\": \"string — short human-readable title, e.g. Q3 pricing review w/ Alice\",\n  \"kind\": \"invite|recording|transcript|recap|conversation|other\",\n  \"platform\": \"google-meet|zoom|teams|webex|chime|in-person|phone|unknown\",\n  \"date\": \"YYYY-MM-DD or null\",\n  \"start_time\": \"HH:MM (24h) or null\",\n  \"end_time\": \"HH:MM (24h) or null\",\n  \"duration_minutes\": \"integer or null\",\n  \"location\": \"string or null\",\n  \"attendees\": [\n    { \"name\": \"string or null\", \"email\": \"string or null\", \"role\": \"host|organizer|attendee|optional|null\" }\n  ],\n  \"summary\": \"2-4 sentence plain prose summary\",\n  \"topics\": [\"short kebab-case tags, 3-8 items\"],\n  \"decisions\": [\"each a single declarative sentence\"],\n  \"action_items\": [\n    { \"owner\": \"string or null\", \"task\": \"string\", \"due\": \"YYYY-MM-DD or null\", \"done\": false, \"priority\": \"high|medium|low\" }\n  ],\n  \"key_quotes\": [\"up to 3 short quotes under 25 words, only if transcript included\"],\n  \"links\": [\"recording/transcript/doc URLs, deduped\"],\n  \"sentiment\": \"positive|neutral|mixed|tense|null\",\n  \"follow_up_needed\": true,\n  \"confidence\": 0.0\n}\n\nRules:\n- If the email is a scheduling back-and-forth with no confirmed time, set kind = \"conversation\".\n- If the email is clearly NOT meeting-related, set confidence < 0.3 and leave most fields empty/null.\n- Names: Title Case. Emails: lowercase.\n- Topics: 1-3 words, kebab-case, no leading #.\n- Action item priority: \"high\" = blocking, urgent, ASAP, must be done this week or before next meeting; \"medium\" = important with deadline within the month; \"low\" = nice-to-have, far future, or no clear deadline.\n- Output valid JSON only. No markdown. No commentary.`;\n\nconst subject  = $json.subject  || $json.Subject  || '(no subject)';\nconst from     = $json.from     || $json.From     || '';\nconst to       = $json.to       || $json.To       || '';\nconst date     = $json.date     || $json.Date     || '';\nconst body     = $json.text     || $json.body     || $json.snippet || '';\n\n// Truncate body to 18000 chars to stay within token limits\nconst truncated = body.length > 18000\n  ? body.slice(0, 9000) + '\\n\\n…[truncated]…\\n\\n' + body.slice(-9000)\n  : body;\n\nconst userPrompt = `SUBJECT: ${subject}\nFROM:    ${from}\nTO:      ${to}\nDATE:    ${date}\n\n--- BODY ---\n${truncated}`;\n\nreturn {\n  json: {\n    ...$json,\n    _groq_body: {\n      model: 'llama-3.3-70b-versatile',\n      temperature: 0.2,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: SYSTEM_PROMPT },\n        { role: 'user',   content: userPrompt },\n      ],\n    },\n  },\n};\n"
+      },
+      "id": "node-build-groq",
+      "name": "Build Groq Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify($json._groq_body) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "node-groq",
+      "name": "Groq LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1320,
+        180
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// n8n Code Node: Parse LLM Response\n// Mode: Run Once for Each Item\n// Input: Groq HTTP Request output\n// Output: original email fields + _extracted { title, attendees, action_items, ... }\n\nconst raw = $json.choices?.[0]?.message?.content || '';\n\n// Strip markdown fences if model ignores response_format instruction\nlet text = raw.trim();\nif (text.startsWith('```')) {\n  text = text.replace(/^```[a-zA-Z]*\\n?/, '').replace(/\\n?```\\s*$/, '');\n  text = text.trim();\n}\n\nlet parsed;\ntry {\n  parsed = JSON.parse(text);\n} catch (_) {\n  // Best-effort: find the first balanced { } block\n  const start = text.indexOf('{');\n  if (start === -1) throw new Error('No JSON object in LLM response: ' + text.slice(0, 200));\n\n  let depth = 0, inStr = false, esc = false;\n  for (let i = start; i < text.length; i++) {\n    const ch = text[i];\n    if (inStr) {\n      if (esc) { esc = false; continue; }\n      if (ch === '\\\\') { esc = true; continue; }\n      if (ch === '\"') inStr = false;\n      continue;\n    }\n    if (ch === '\"') inStr = true;\n    else if (ch === '{') depth++;\n    else if (ch === '}') {\n      depth--;\n      if (depth === 0) {\n        parsed = JSON.parse(text.slice(start, i + 1));\n        break;\n      }\n    }\n  }\n  if (!parsed) throw new Error('Could not extract JSON from LLM response');\n}\n\n// Pull the email fields from the upstream Build Groq Request node\nconst email = $('Build Groq Request').item.json;\n\nreturn {\n  json: {\n    // Preserve original email metadata\n    _email_subject:    email.subject  || email.Subject  || '',\n    _email_from:       email.from     || email.From     || '',\n    _email_date:       email.date     || email.Date     || '',\n    _email_message_id: email.id       || email.messageId || '',\n    // Forward _message_id set by Check Duplicate (survives through Groq LLM via Build Groq Request)\n    _message_id:       email._message_id || email.id || email.messageId || '',\n    _classification:   email._classification,\n\n    // Structured extraction result\n    _extracted: {\n      title:            parsed.title            || 'Meeting',\n      kind:             parsed.kind             || 'other',\n      platform:         parsed.platform         || 'unknown',\n      date:             parsed.date             || null,\n      start_time:       parsed.start_time       || null,\n      end_time:         parsed.end_time         || null,\n      duration_minutes: parsed.duration_minutes || null,\n      location:         parsed.location         || null,\n      attendees:        parsed.attendees        || [],\n      summary:          parsed.summary          || '',\n      topics:           (parsed.topics || []).map(t => t.toLowerCase().trim()),\n      decisions:        parsed.decisions        || [],\n      action_items:     parsed.action_items     || [],\n      key_quotes:       parsed.key_quotes       || [],\n      links:            parsed.links            || [],\n      sentiment:        parsed.sentiment        || null,\n      follow_up_needed: !!parsed.follow_up_needed,\n      confidence:       parseFloat(parsed.confidence) || 0,\n    },\n  },\n};\n"
+      },
+      "id": "node-parse",
+      "name": "Parse LLM Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json._extracted.confidence }}",
+              "operation": "largerEqual",
+              "value2": 0.3
+            }
+          ]
+        }
+      },
+      "id": "node-if-confidence",
+      "name": "Confidence OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// n8n Code Node: Mark as Processed\n// Mode: Run Once for Each Item\n// Writes Gmail message ID + metadata to workflow static data.\n// Runs after the confidence gate — only emails that pass both gates are recorded.\n// This is the deduplication commit point.\n\nconst state = $getWorkflowStaticData('global');\nstate.processed = state.processed || {};\n\nconst msgId = $json._message_id || $json._email_message_id || '';\nif (msgId) {\n  state.processed[msgId] = {\n    processed_at: new Date().toISOString(),\n    kind: $json._extracted?.kind || 'unknown',\n    confidence: $json._extracted?.confidence || 0,\n  };\n}\n\nreturn { json: $json };\n"
+      },
+      "id": "node-mark-processed",
+      "name": "Mark as Processed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// n8n Code Node: Build Confluence Page\n// Mode: Run Once for Each Item\n// Builds _confluence_title (string) and _confluence_body (HTML string) from _extracted.\n// Replaces the 400-char inline template previously embedded in the Confluence node.\n\nconst e = $json._extracted;\n\nfunction escapeHtml(str) {\n  if (!str && str !== 0) return '';\n  return String(str)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;');\n}\n\nfunction badge(priority) {\n  const p = (priority || 'low').toLowerCase();\n  if (p === 'high')   return '<strong style=\"color:#bf2600\">[HIGH]</strong>';\n  if (p === 'medium') return '<strong style=\"color:#ff8b00\">[MED]</strong>';\n  return '<strong style=\"color:#505f79\">[LOW]</strong>';\n}\n\n// Title: \"YYYY-MM-DD — Meeting Title\" or just \"Meeting Title\"\nconst _confluence_title = (e.date ? escapeHtml(e.date) + ' — ' : '') + escapeHtml(e.title || 'Meeting');\n\nconst parts = [];\n\n// Summary\nparts.push('<h2>Summary</h2>');\nparts.push('<p>' + escapeHtml(e.summary || 'No summary available.') + '</p>');\n\n// Meeting Details table — only rows where data exists\nparts.push('<h2>Meeting Details</h2><table><tbody>');\nif (e.date)             parts.push('<tr><td><strong>Date</strong></td><td>' + escapeHtml(e.date) + '</td></tr>');\nif (e.platform)         parts.push('<tr><td><strong>Platform</strong></td><td>' + escapeHtml(e.platform) + '</td></tr>');\nif (e.duration_minutes) parts.push('<tr><td><strong>Duration</strong></td><td>' + escapeHtml(String(e.duration_minutes)) + ' min</td></tr>');\nif (e.start_time)       parts.push('<tr><td><strong>Time</strong></td><td>' + escapeHtml(e.start_time) + (e.end_time ? ' &ndash; ' + escapeHtml(e.end_time) : '') + '</td></tr>');\nif (e.location)         parts.push('<tr><td><strong>Location</strong></td><td>' + escapeHtml(e.location) + '</td></tr>');\nif (e.sentiment)        parts.push('<tr><td><strong>Sentiment</strong></td><td>' + escapeHtml(e.sentiment) + '</td></tr>');\nparts.push('<tr><td><strong>Follow-up needed</strong></td><td>' + (e.follow_up_needed ? 'Yes' : 'No') + '</td></tr>');\nparts.push('</tbody></table>');\n\n// Attendees\nif (e.attendees && e.attendees.length > 0) {\n  parts.push('<h2>Attendees</h2><ul>');\n  for (const a of e.attendees) {\n    const name  = escapeHtml(a.name  || a.email || 'Unknown');\n    const email = a.email ? ' (' + escapeHtml(a.email) + ')' : '';\n    const role  = a.role  ? ' — ' + escapeHtml(a.role) : '';\n    parts.push('<li>' + name + email + role + '</li>');\n  }\n  parts.push('</ul>');\n}\n\n// Decisions\nif (e.decisions && e.decisions.length > 0) {\n  parts.push('<h2>Decisions</h2><ul>');\n  for (const d of e.decisions) parts.push('<li>' + escapeHtml(d) + '</li>');\n  parts.push('</ul>');\n}\n\n// Action Items\nif (e.action_items && e.action_items.length > 0) {\n  parts.push('<h2>Action Items</h2><ul>');\n  for (const a of e.action_items) {\n    const owner = a.owner ? '<strong>' + escapeHtml(a.owner) + '</strong> — ' : '';\n    const due   = a.due   ? ' <em>(due ' + escapeHtml(a.due) + ')</em>' : '';\n    parts.push('<li>' + badge(a.priority) + ' ' + owner + escapeHtml(a.task) + due + '</li>');\n  }\n  parts.push('</ul>');\n}\n\n// Key Quotes (only when present)\nif (e.key_quotes && e.key_quotes.length > 0) {\n  parts.push('<h2>Key Quotes</h2><ul>');\n  for (const q of e.key_quotes) {\n    parts.push('<li><em>&ldquo;' + escapeHtml(q) + '&rdquo;</em></li>');\n  }\n  parts.push('</ul>');\n}\n\n// Topics\nif (e.topics && e.topics.length > 0) {\n  parts.push('<h2>Topics</h2>');\n  parts.push('<p>' + e.topics.map(t => escapeHtml(t)).join(' · ') + '</p>');\n}\n\n// Source Email\nparts.push('<h2>Source Email</h2>');\nparts.push(\n  '<p>' +\n  'From: '    + escapeHtml($json._email_from    || '') + '<br/>' +\n  'Date: '    + escapeHtml($json._email_date    || '') + '<br/>' +\n  'Subject: ' + escapeHtml($json._email_subject || '') +\n  '</p>'\n);\n\nreturn {\n  json: {\n    ...$json,\n    _confluence_title,\n    _confluence_body: parts.join('\\n'),\n  },\n};\n"
+      },
+      "id": "node-build-confluence",
+      "name": "Build Confluence Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "page",
+        "operation": "create",
+        "spaceKey": "SD",
+        "title": "={{ $json._confluence_title }}",
+        "content": "={{ $json._confluence_body }}",
+        "additionalFields": {}
+      },
+      "id": "node-confluence",
+      "name": "Create Confluence Page",
+      "type": "n8n-nodes-base.confluence",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        60
+      ],
+      "credentials": {
+        "confluenceApi": {
+          "id": "",
+          "name": "Confluence account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// n8n Code Node: Expand Action Items\n// Mode: Run Once for All Items\n// Input: Create Confluence Page output (1 item)\n// Output: N items — one per action item — each ready for Jira Create Issue\n\nconst items = $input.all();\nconst result = [];\n\nfor (const item of items) {\n  const confluencePageId  = item.json.id    || '';\n  const confluencePageUrl = item.json._links?.webui\n    ? `https://shubhamgaur1.atlassian.net/wiki${item.json._links.webui}`\n    : '';\n\n  // Get extraction data from Parse LLM Response node\n  const parsed     = $('Parse LLM Response').item.json;\n  const extracted  = parsed._extracted;\n  const actionItems = extracted.action_items || [];\n\n  if (actionItems.length === 0) {\n    // No action items — output one sentinel so the downstream Has Action Items? node can filter it\n    result.push({\n      json: {\n        _no_action_items: true,\n        _extracted: extracted,\n        _confluence_page_url: confluencePageUrl,\n        _confluence_page_id:  confluencePageId,\n      },\n    });\n    continue;\n  }\n\n  for (let i = 0; i < actionItems.length; i++) {\n    const ai = actionItems[i];\n    const priority = _getPriority(ai);\n\n    result.push({\n      json: {\n        _extracted:            extracted,\n        _confluence_page_url:  confluencePageUrl,\n        _confluence_page_id:   confluencePageId,\n        _action_item_index:    i,\n        _current_action_item:  ai,\n        _priority:             priority,\n        _is_high_priority:     priority === 'high',\n        _jira_summary:         (ai.task || 'Action item').slice(0, 255),\n        _jira_due_date:        ai.due   || null,\n        _jira_owner:           ai.owner || null,\n        _jira_labels:          ['meeting-generated', ...(extracted.topics || [])],\n        _jira_description:     _buildDescription(extracted, ai, priority, confluencePageUrl, parsed),\n        _email_subject:        parsed._email_subject || '',\n        _email_from:           parsed._email_from    || '',\n        _email_date:           parsed._email_date    || '',\n      },\n    });\n  }\n}\n\nreturn result;\n\n// ---- helpers ----------------------------------------------------------------\n\nfunction _getPriority(item) {\n  const p = (item.priority || '').toLowerCase();\n  if (p === 'high' || p === 'medium' || p === 'low') return p;\n\n  // Due-date heuristic for items without a priority field\n  if (item.due) {\n    try {\n      const days = Math.floor(\n        (new Date(item.due) - new Date()) / (1000 * 60 * 60 * 24)\n      );\n      if (days <= 14) return 'high';\n      if (days <= 60) return 'medium';\n    } catch (_) {}\n  }\n  return 'low';\n}\n\nfunction _buildDescription(extracted, ai, priority, confluenceUrl, parsed) {\n  const lines = [];\n\n  lines.push('Meeting: ' + (extracted.title || 'Meeting'));\n\n  let meetingLine = 'Date: ' + (extracted.date || 'Unknown');\n  if (extracted.platform && extracted.platform !== 'unknown') {\n    meetingLine += ' | Platform: ' + extracted.platform;\n  }\n  if (extracted.duration_minutes) {\n    meetingLine += ' | Duration: ' + extracted.duration_minutes + ' min';\n  }\n  lines.push(meetingLine);\n  lines.push('');\n\n  lines.push('Action Item:');\n  lines.push(ai.task || 'Action item');\n  lines.push('');\n\n  const meta = [];\n  if (ai.owner)  meta.push('Owner: ' + ai.owner);\n  if (ai.due)    meta.push('Due: ' + ai.due);\n  if (priority)  meta.push('Priority: ' + priority);\n  if (meta.length) lines.push(meta.join('  |  '));\n\n  lines.push('');\n  lines.push('──────────────────────────────');\n  lines.push('Meeting Summary:');\n  lines.push(extracted.summary || '');\n\n  if (extracted.decisions && extracted.decisions.length > 0) {\n    lines.push('');\n    lines.push('Decisions:');\n    for (const d of extracted.decisions) lines.push('• ' + d);\n  }\n\n  if (extracted.attendees && extracted.attendees.length > 0) {\n    lines.push('');\n    lines.push('Attendees:');\n    for (const a of extracted.attendees) {\n      const name  = a.name || a.email || 'Unknown';\n      const email = (a.email && a.name) ? ' (' + a.email + ')' : '';\n      lines.push('• ' + name + email);\n    }\n  }\n\n  lines.push('');\n  lines.push('──────────────────────────────');\n  if (confluenceUrl) lines.push('Confluence Note: ' + confluenceUrl);\n  lines.push(\n    'Source: \"' + (parsed._email_subject || '') +\n    '\" from '  + (parsed._email_from    || '') +\n    ' on '     + (parsed._email_date    || '')\n  );\n\n  return lines.join('\\n');\n}\n"
+      },
+      "id": "node-expand",
+      "name": "Expand Action Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !$json._no_action_items }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node-has-action-items",
+      "name": "Has Action Items?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2860,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "issue",
+        "project": {
+          "key": "SCRUM"
+        },
+        "issuetype": {
+          "name": "Task"
+        },
+        "summary": "={{ $json._jira_summary }}",
+        "additionalFields": {
+          "priority": {
+            "name": "={{ $json._priority === 'high' ? 'High' : $json._priority === 'medium' ? 'Medium' : 'Low' }}"
+          },
+          "labels": "={{ $json._jira_labels }}",
+          "duedate": "={{ $json._jira_due_date }}",
+          "description": "={{ $json._jira_description }}"
+        }
+      },
+      "id": "node-jira",
+      "name": "Create Jira Issue",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        3080,
+        60
+      ],
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "",
+          "name": "Jira account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json._is_high_priority }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node-if-priority",
+      "name": "High Priority?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        3300,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://shubhamgaur1.atlassian.net/rest/agile/1.0/board/1/sprint",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "state",
+              "value": "active"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-get-sprint",
+      "name": "Get Active Sprint",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        3520,
+        -60
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "Jira Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://shubhamgaur1.atlassian.net/rest/agile/1.0/sprint/' + $('Get Active Sprint').item.json.values[0].id + '/issue' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ issues: [$('Create Jira Issue').item.json.key] }) }}",
+        "options": {}
+      },
+      "id": "node-add-sprint",
+      "name": "Add to Active Sprint",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        3740,
+        -60
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "Jira Basic Auth"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Classify Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Email": {
+      "main": [
+        [
+          {
+            "node": "Is Meeting?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Meeting?": {
+      "main": [
+        [
+          {
+            "node": "Is Invite?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Is Invite?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Build Groq Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Groq Request": {
+      "main": [
+        [
+          {
+            "node": "Groq LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM Response": {
+      "main": [
+        [
+          {
+            "node": "Confidence OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confidence OK?": {
+      "main": [
+        [
+          {
+            "node": "Mark as Processed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Mark as Processed": {
+      "main": [
+        [
+          {
+            "node": "Build Confluence Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Confluence Page": {
+      "main": [
+        [
+          {
+            "node": "Create Confluence Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Confluence Page": {
+      "main": [
+        [
+          {
+            "node": "Expand Action Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Action Items": {
+      "main": [
+        [
+          {
+            "node": "Has Action Items?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Action Items?": {
+      "main": [
+        [
+          {
+            "node": "Create Jira Issue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Create Jira Issue": {
+      "main": [
+        [
+          {
+            "node": "High Priority?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "High Priority?": {
+      "main": [
+        [
+          {
+            "node": "Get Active Sprint",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Get Active Sprint": {
+      "main": [
+        [
+          {
+            "node": "Add to Active Sprint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  }
+}
