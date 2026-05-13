@@ -95,15 +95,26 @@ docs/
 
 ## Setup
 
-See [docs/setup.md](docs/setup.md) for the full walkthrough.
+### Automated (recommended)
 
-**Short version:**
+```bash
+cp .env.example .env
+# Fill in your values in .env
+node scripts/setup.js
+```
 
-1. Add 5 credentials in n8n (Gmail OAuth2, Groq Header Auth, Confluence, Jira, Jira Basic Auth)
-2. Import `workflows/meeting-memory.json` into n8n
-3. Connect credentials to each node
-4. Send yourself a test meeting email and click **Test workflow**
-5. Once verified, flip the **Active** toggle
+This creates all credentials in n8n and imports the workflow automatically. One manual step remains: click the Gmail Trigger node → connect Gmail OAuth2 (browser OAuth flow, can't be scripted).
+
+**What you need before running:**
+| Value | Where to get it |
+|---|---|
+| `N8N_API_KEY` | n8n → Settings → n8n API → Create an API key |
+| `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) → API Keys → Create key (free) |
+| `ATLASSIAN_API_TOKEN` | [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens) |
+
+### Manual
+
+See [docs/setup.md](docs/setup.md) for the step-by-step credential setup walkthrough.
 
 ---
 
