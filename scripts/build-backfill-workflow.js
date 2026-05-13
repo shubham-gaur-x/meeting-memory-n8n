@@ -48,7 +48,10 @@ const workflow = {
         filters: {
           q: `after:${afterDate}`,
         },
-        options: {},
+        options: {
+          format: 'full',
+          attachments: 'none',
+        },
       },
       id: 'node-gmail-fetch',
       name: 'Fetch All Emails',

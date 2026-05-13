@@ -20,7 +20,10 @@
         "filters": {
           "q": "after:2025/05/13"
         },
-        "options": {}
+        "options": {
+          "format": "full",
+          "attachments": "none"
+        }
       },
       "id": "node-gmail-fetch",
       "name": "Fetch All Emails",
