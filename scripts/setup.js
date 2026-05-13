@@ -54,9 +54,17 @@ function n8nRequest(method, endpoint, body) {
     const url       = new URL(`${base}${prefix}${endpoint}`);
     const data      = body ? JSON.stringify(body) : null;
 
-    const authHeader = usePublic
-      ? { 'X-N8N-API-KEY': process.env.N8N_API_KEY }
-      : { 'Cookie': process.env.N8N_AUTH_COOKIE };
+    let authHeaders;
+    if (usePublic) {
+      authHeaders = { 'X-N8N-API-KEY': process.env.N8N_API_KEY };
+    } else {
+      authHeaders = {
+        'Cookie':     process.env.N8N_AUTH_COOKIE,
+        'browser-id': process.env.N8N_BROWSER_ID,
+        'Origin':     base,
+        'Referer':    `${base}/`,
+      };
+    }
 
     const options = {
       method,
@@ -64,7 +72,7 @@ function n8nRequest(method, endpoint, body) {
       port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: url.pathname + url.search,
       headers: {
-        ...authHeader,
+        ...authHeaders,
         'Content-Type': 'application/json',
         ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
       },
@@ -92,8 +100,9 @@ function n8nRequest(method, endpoint, body) {
 
 async function createCredential(name, type, data) {
   const result = await n8nRequest('POST', '/credentials', { name, type, data, nodesAccess: [] });
-  console.log(`  ✓ ${name} (id: ${result.id})`);
-  return result.id;
+  const id = result.data?.id ?? result.id;
+  console.log(`  ✓ ${name} (id: ${id})`);
+  return id;
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -121,49 +130,19 @@ async function main() {
   const atlassianHost = process.env.ATLASSIAN_HOST.replace(/\/$/, '');
   const n8nBase       = process.env.N8N_BASE_URL.replace(/\/$/, '');
 
-  console.log('\n── Step 1: Creating credentials ────────────────────────────');
-
-  const groqId = await createCredential('Groq API', 'httpHeaderAuth', {
-    name:  'Authorization',
-    value: `Bearer ${process.env.GROQ_API_KEY}`,
-  });
-
-  const confluenceId = await createCredential('Confluence account', 'confluenceApi', {
-    username: process.env.ATLASSIAN_EMAIL,
-    apiKey:   process.env.ATLASSIAN_API_TOKEN,
-    domain:   `${atlassianHost}/wiki`,
-  });
-
-  const jiraId = await createCredential('Jira account', 'jiraSoftwareCloudApi', {
-    email:     process.env.ATLASSIAN_EMAIL,
-    apiToken:  process.env.ATLASSIAN_API_TOKEN,
-    domain:    atlassianHost,
-  });
-
-  const jiraBasicId = await createCredential('Jira Basic Auth', 'httpBasicAuth', {
-    user:     process.env.ATLASSIAN_EMAIL,
-    password: process.env.ATLASSIAN_API_TOKEN,
-  });
-
-  console.log('\n── Step 2: Patching workflow with credential IDs ────────────');
-
   const workflowPath = path.join(__dirname, '..', 'workflows', 'meeting-memory.json');
   const workflow     = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
 
-  // Patch credential IDs into each node
+  // Apply config overrides from .env before importing
   for (const node of workflow.nodes) {
-    const c = node.credentials;
-    if (!c) continue;
-    if (c.httpHeaderAuth)       c.httpHeaderAuth.id       = groqId;
-    if (c.confluenceApi)        c.confluenceApi.id        = confluenceId;
-    if (c.jiraSoftwareCloudApi) c.jiraSoftwareCloudApi.id = jiraId;
-    if (c.httpBasicAuth)        c.httpBasicAuth.id        = jiraBasicId;
-  }
-
-  // Apply any config overrides from .env
-  for (const node of workflow.nodes) {
-    if (node.name === 'Create Confluence Page' && process.env.CONFLUENCE_SPACE_KEY) {
-      node.parameters.spaceKey = process.env.CONFLUENCE_SPACE_KEY;
+    if (node.name === 'Create Confluence Page') {
+      // Patch Atlassian host and space key into the HTTP Request body expression
+      if (process.env.ATLASSIAN_HOST) {
+        node.parameters.url = `${atlassianHost}/wiki/rest/api/content`;
+      }
+      if (process.env.CONFLUENCE_SPACE_KEY) {
+        node.parameters.body = node.parameters.body.replace("key: 'SD'", `key: '${process.env.CONFLUENCE_SPACE_KEY}'`);
+      }
     }
     if (node.name === 'Create Jira Issue' && process.env.JIRA_PROJECT_KEY) {
       node.parameters.project = { key: process.env.JIRA_PROJECT_KEY };
@@ -182,16 +161,71 @@ async function main() {
     }
   }
 
-  console.log('  ✓ Credential IDs and config patched');
+  // Remove credential references before import — n8n rejects unknown/unshared credentials
+  // We'll patch them back in after creating the credentials
+  const savedCredentials = {};
+  for (const node of workflow.nodes) {
+    if (!node.credentials) continue;
+    savedCredentials[node.name] = node.credentials;
+    delete node.credentials;
+  }
 
-  console.log('\n── Step 3: Importing workflow ───────────────────────────────');
+  console.log('\n── Step 1: Importing workflow (registers node types) ────────');
 
-  const created = await n8nRequest('POST', '/workflows', workflow);
-  console.log(`  ✓ Workflow imported (id: ${created.id})`);
+  const importResult = await n8nRequest('POST', '/workflows', workflow);
+  const workflowId   = importResult.data?.id ?? importResult.id;
+  console.log(`  ✓ Workflow imported (id: ${workflowId})`);
+
+  console.log('\n── Step 2: Creating credentials ────────────────────────────');
+
+  const groqId = await createCredential('Groq API', 'httpHeaderAuth', {
+    name:  'Authorization',
+    value: `Bearer ${process.env.GROQ_API_KEY}`,
+  });
+
+  // Confluence uses HTTP Basic Auth directly — confluenceApi type is not
+  // available in n8n cloud, so the workflow uses httpRequest + httpBasicAuth
+  const confluenceBasicId = await createCredential('Confluence Basic Auth', 'httpBasicAuth', {
+    user:     process.env.ATLASSIAN_EMAIL,
+    password: process.env.ATLASSIAN_API_TOKEN,
+  });
+
+  const jiraId = await createCredential('Jira account', 'jiraSoftwareCloudApi', {
+    email:     process.env.ATLASSIAN_EMAIL,
+    apiToken:  process.env.ATLASSIAN_API_TOKEN,
+    domain:    atlassianHost,
+  });
+
+  const jiraBasicId = await createCredential('Jira Basic Auth', 'httpBasicAuth', {
+    user:     process.env.ATLASSIAN_EMAIL,
+    password: process.env.ATLASSIAN_API_TOKEN,
+  });
+
+  console.log('\n── Step 3: Patching workflow with credential IDs ────────────');
+
+  const credMap = {
+    'Groq API':            groqId,
+    'Confluence Basic Auth': confluenceBasicId,
+    'Jira account':        jiraId,
+    'Jira Basic Auth':     jiraBasicId,
+  };
+
+  // Restore credentials and set real IDs — match by credential name
+  for (const node of workflow.nodes) {
+    const c = savedCredentials[node.name];
+    if (!c) continue;
+    node.credentials = c;
+    for (const ref of Object.values(c)) {
+      if (credMap[ref.name]) ref.id = credMap[ref.name];
+    }
+  }
+
+  await n8nRequest('PATCH', `/workflows/${workflowId}`, workflow);
+  console.log('  ✓ Workflow updated with credential IDs');
 
   console.log('\n────────────────────────────────────────────────────────────');
   console.log('Setup complete!\n');
-  console.log(`Workflow URL: ${n8nBase}/workflow/${created.id}\n`);
+  console.log(`Workflow URL: ${n8nBase}/workflow/${workflowId}\n`);
   console.log('One manual step remaining:');
   console.log('  1. Open the workflow URL above');
   console.log('  2. Click the Gmail Trigger node');

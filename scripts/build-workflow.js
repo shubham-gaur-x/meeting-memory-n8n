@@ -160,22 +160,25 @@ const workflow = {
       position: [2200, 60]
     },
 
-    // ── 12. Create Confluence Page (title + content from code node) ───────
+    // ── 12. Create Confluence Page (HTTP Request — native confluence node
+    //        credential type is not available in n8n cloud; httpBasicAuth works)
     {
       parameters: {
-        resource: 'page',
-        operation: 'create',
-        spaceKey: 'SD',
-        title: '={{ $json._confluence_title }}',
-        content: '={{ $json._confluence_body }}',
-        additionalFields: {}
+        method: 'POST',
+        url: 'https://shubhamgaur1.atlassian.net/wiki/rest/api/content',
+        authentication: 'genericCredentialType',
+        genericAuthType: 'httpBasicAuth',
+        sendBody: true,
+        contentType: 'json',
+        body: "={{ JSON.stringify({ type: 'page', title: $json._confluence_title, space: { key: 'SD' }, body: { storage: { value: $json._confluence_body, representation: 'storage' } } }) }}",
+        options: {}
       },
       id: 'node-confluence',
       name: 'Create Confluence Page',
-      type: 'n8n-nodes-base.confluence',
-      typeVersion: 1,
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4,
       position: [2420, 60],
-      credentials: { confluenceApi: { id: '', name: 'Confluence account' } }
+      credentials: { httpBasicAuth: { id: '', name: 'Confluence Basic Auth' } }
     },
 
     // ── 13. Expand Action Items ───────────────────────────────────────────

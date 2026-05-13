@@ -205,25 +205,27 @@
     },
     {
       "parameters": {
-        "resource": "page",
-        "operation": "create",
-        "spaceKey": "SD",
-        "title": "={{ $json._confluence_title }}",
-        "content": "={{ $json._confluence_body }}",
-        "additionalFields": {}
+        "method": "POST",
+        "url": "https://shubhamgaur1.atlassian.net/wiki/rest/api/content",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ type: 'page', title: $json._confluence_title, space: { key: 'SD' }, body: { storage: { value: $json._confluence_body, representation: 'storage' } } }) }}",
+        "options": {}
       },
       "id": "node-confluence",
       "name": "Create Confluence Page",
-      "type": "n8n-nodes-base.confluence",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
       "position": [
         2420,
         60
       ],
       "credentials": {
-        "confluenceApi": {
+        "httpBasicAuth": {
           "id": "",
-          "name": "Confluence account"
+          "name": "Confluence Basic Auth"
         }
       }
     },
