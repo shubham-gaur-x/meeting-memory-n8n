@@ -119,7 +119,22 @@ const workflow = {
       position: [1320, 180],
     },
 
-    // ── 8. Groq LLM ───────────────────────────────────────────────────────────
+    // ── 8. Rate Limit (2s wait between Groq calls to stay under 30 RPM) ─────────
+    {
+      parameters: {
+        resume: 'timeInterval',
+        unit: 'seconds',
+        amount: 2,
+      },
+      id: 'node-groq-rate-limit',
+      name: 'Rate Limit (2s)',
+      type: 'n8n-nodes-base.wait',
+      typeVersion: 1,
+      position: [1430, 180],
+      webhookId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    },
+
+    // ── 9. Groq LLM ───────────────────────────────────────────────────────────
     {
       parameters: {
         method: 'POST',
@@ -314,7 +329,8 @@ const workflow = {
     'Classify Email':        { main: [[{ node: 'Is Meeting?',          type: 'main', index: 0 }]] },
     'Is Meeting?':           { main: [[{ node: 'Is Invite?',           type: 'main', index: 0 }], []] },
     'Is Invite?':            { main: [[], [{ node: 'Build Groq Request', type: 'main', index: 0 }]] },
-    'Build Groq Request':    { main: [[{ node: 'Groq LLM',            type: 'main', index: 0 }]] },
+    'Build Groq Request':    { main: [[{ node: 'Rate Limit (2s)',      type: 'main', index: 0 }]] },
+    'Rate Limit (2s)':       { main: [[{ node: 'Groq LLM',            type: 'main', index: 0 }]] },
     'Groq LLM':              { main: [[{ node: 'Parse LLM Response',  type: 'main', index: 0 }]] },
     'Parse LLM Response':    { main: [[{ node: 'Confidence OK?',       type: 'main', index: 0 }]] },
     'Confidence OK?':        { main: [[{ node: 'Mark as Processed',    type: 'main', index: 0 }], []] },

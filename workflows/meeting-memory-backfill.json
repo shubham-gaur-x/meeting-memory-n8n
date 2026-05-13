@@ -126,6 +126,22 @@
     },
     {
       "parameters": {
+        "resume": "timeInterval",
+        "unit": "seconds",
+        "amount": 2
+      },
+      "id": "node-groq-rate-limit",
+      "name": "Rate Limit (2s)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        1430,
+        180
+      ],
+      "webhookId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "https://api.groq.com/openai/v1/chat/completions",
         "authentication": "genericCredentialType",
@@ -466,6 +482,17 @@
       ]
     },
     "Build Groq Request": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit (2s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit (2s)": {
       "main": [
         [
           {
