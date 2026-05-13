@@ -145,7 +145,7 @@ async function main() {
       }
     }
     if (node.name === 'Create Jira Issue' && process.env.JIRA_PROJECT_KEY) {
-      node.parameters.project = { key: process.env.JIRA_PROJECT_KEY };
+      node.parameters.project = { __rl: true, mode: 'list', value: process.env.JIRA_PROJECT_KEY, cachedResultName: process.env.JIRA_PROJECT_KEY };
     }
     if (node.name === 'Get Active Sprint' && process.env.JIRA_BOARD_ID) {
       node.parameters.url = node.parameters.url.replace(

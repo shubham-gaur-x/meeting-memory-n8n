@@ -208,9 +208,8 @@ const workflow = {
     // ── 15. Create Jira Issue (richer description) ────────────────────────
     {
       parameters: {
-        resource: 'issue',
-        project: { key: 'SCRUM' },
-        issuetype: { name: 'Task' },
+        project: { __rl: true, mode: 'list', value: 'SCRUM', cachedResultName: 'SCRUM' },
+        issueType: { __rl: true, mode: 'list', value: 'Task', cachedResultName: 'Task' },
         summary: '={{ $json._jira_summary }}',
         additionalFields: {
           priority: {

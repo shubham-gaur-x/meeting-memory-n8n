@@ -265,12 +265,17 @@
     },
     {
       "parameters": {
-        "resource": "issue",
         "project": {
-          "key": "SCRUM"
+          "__rl": true,
+          "mode": "list",
+          "value": "SCRUM",
+          "cachedResultName": "SCRUM"
         },
-        "issuetype": {
-          "name": "Task"
+        "issueType": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Task",
+          "cachedResultName": "Task"
         },
         "summary": "={{ $json._jira_summary }}",
         "additionalFields": {
