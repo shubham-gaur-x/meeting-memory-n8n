@@ -128,7 +128,7 @@ const workflow = {
         genericAuthType: 'httpHeaderAuth',
         sendBody: true,
         contentType: 'json',
-        body: '={{ JSON.stringify($json._groq_body) }}',
+        body: '={{ $json._groq_body }}',
         options: { timeout: 60000 },
       },
       id: 'node-groq',
