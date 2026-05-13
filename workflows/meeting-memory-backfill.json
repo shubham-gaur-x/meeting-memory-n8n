@@ -132,7 +132,8 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "contentType": "json",
-        "body": "={{ $json._groq_body }}",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json._groq_body) }}",
         "options": {
           "timeout": 60000
         }
