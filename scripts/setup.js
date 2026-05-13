@@ -42,12 +42,21 @@ function requireEnv(keys) {
 }
 
 // ── n8n API helper ───────────────────────────────────────────────────────────
+// Supports two auth modes:
+//   N8N_API_KEY    → public REST API  (/api/v1/...)  via X-N8N-API-KEY header
+//   N8N_AUTH_COOKIE → internal REST API (/rest/...)  via browser session cookie
 
 function n8nRequest(method, endpoint, body) {
   return new Promise((resolve, reject) => {
-    const base   = process.env.N8N_BASE_URL.replace(/\/$/, '');
-    const url    = new URL(`${base}/api/v1${endpoint}`);
-    const data   = body ? JSON.stringify(body) : null;
+    const base      = process.env.N8N_BASE_URL.replace(/\/$/, '');
+    const usePublic = !!process.env.N8N_API_KEY;
+    const prefix    = usePublic ? '/api/v1' : '/rest';
+    const url       = new URL(`${base}${prefix}${endpoint}`);
+    const data      = body ? JSON.stringify(body) : null;
+
+    const authHeader = usePublic
+      ? { 'X-N8N-API-KEY': process.env.N8N_API_KEY }
+      : { 'Cookie': process.env.N8N_AUTH_COOKIE };
 
     const options = {
       method,
@@ -55,7 +64,7 @@ function n8nRequest(method, endpoint, body) {
       port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: url.pathname + url.search,
       headers: {
-        'X-N8N-API-KEY': process.env.N8N_API_KEY,
+        ...authHeader,
         'Content-Type': 'application/json',
         ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
       },
@@ -82,7 +91,7 @@ function n8nRequest(method, endpoint, body) {
 // ── Credential creation ───────────────────────────────────────────────────────
 
 async function createCredential(name, type, data) {
-  const result = await n8nRequest('POST', '/credentials', { name, type, data });
+  const result = await n8nRequest('POST', '/credentials', { name, type, data, nodesAccess: [] });
   console.log(`  ✓ ${name} (id: ${result.id})`);
   return result.id;
 }
@@ -93,12 +102,21 @@ async function main() {
   loadEnv();
   requireEnv([
     'N8N_BASE_URL',
-    'N8N_API_KEY',
     'GROQ_API_KEY',
     'ATLASSIAN_EMAIL',
     'ATLASSIAN_API_TOKEN',
     'ATLASSIAN_HOST',
   ]);
+
+  if (!process.env.N8N_API_KEY && !process.env.N8N_AUTH_COOKIE) {
+    console.error('ERROR: Provide either N8N_API_KEY or N8N_AUTH_COOKIE in .env');
+    console.error('       N8N_API_KEY:     from n8n → Settings → n8n API');
+    console.error('       N8N_AUTH_COOKIE: browser DevTools → any /rest/ request → Cookie header');
+    process.exit(1);
+  }
+
+  const authMode = process.env.N8N_API_KEY ? 'public API (X-N8N-API-KEY)' : 'internal API (session cookie)';
+  console.log(`Auth mode: ${authMode}`);
 
   const atlassianHost = process.env.ATLASSIAN_HOST.replace(/\/$/, '');
   const n8nBase       = process.env.N8N_BASE_URL.replace(/\/$/, '');
