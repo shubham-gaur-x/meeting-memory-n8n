@@ -171,7 +171,8 @@ const workflow = {
         genericAuthType: 'httpBasicAuth',
         sendBody: true,
         contentType: 'json',
-        body: "={{ JSON.stringify({ type: 'page', title: $json._confluence_title, space: { key: 'SD' }, body: { storage: { value: $json._confluence_body, representation: 'storage' } } }) }}",
+        specifyBody: 'json',
+        jsonBody: "={{ JSON.stringify({ type: 'page', title: $json._confluence_title, space: { key: 'SD' }, body: { storage: { value: $json._confluence_body, representation: 'storage' } } }) }}",
         options: {}
       },
       id: 'node-confluence',
@@ -271,7 +272,8 @@ const workflow = {
         genericAuthType: 'httpBasicAuth',
         sendBody: true,
         contentType: 'json',
-        body: "={{ JSON.stringify({ issues: [$('Create Jira Issue').item.json.key] }) }}",
+        specifyBody: 'json',
+        jsonBody: "={{ JSON.stringify({ issues: [$('Create Jira Issue').item.json.key] }) }}",
         options: {}
       },
       id: 'node-add-sprint',
