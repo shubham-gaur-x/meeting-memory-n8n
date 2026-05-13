@@ -128,10 +128,10 @@
       "parameters": {
         "resume": "timeInterval",
         "unit": "seconds",
-        "amount": 2
+        "amount": 30
       },
       "id": "node-groq-rate-limit",
-      "name": "Rate Limit (2s)",
+      "name": "Rate Limit (30s)",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1,
       "position": [
@@ -485,14 +485,14 @@
       "main": [
         [
           {
-            "node": "Rate Limit (2s)",
+            "node": "Rate Limit (30s)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Rate Limit (2s)": {
+    "Rate Limit (30s)": {
       "main": [
         [
           {
